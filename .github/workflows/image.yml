@@ -1,0 +1,107 @@
+name: Build & publish image
+
+# Upstream publishes no container image (no releases, no GHCR package, no workflows) — only
+# a Dockerfile. This fork builds one and pushes it to GHCR; the NexoFlux deployment
+# (nexoflux-internal-services → docker/openstock/compose.yaml) pins :latest by digest and
+# Renovate opens a PR when the tag moves.
+#
+# Tags: :latest (deployed, digest-pinned downstream) and :sha-<12> (traceability, also the
+# existence check that makes a re-run a no-op).
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".github/FUNDING.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if this commit's image tag already exists
+        type: boolean
+        default: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/openstock
+  # Throwaway, build-only: `next build` imports lib/better-auth/auth.ts, which awaits a
+  # MongoDB connection at module scope. The CI job runs mongo:7 on the runner and reaches it
+  # through host.docker.internal. Never put a real credential here — it shows up in the
+  # image history as part of the RUN command.
+  BUILD_MONGODB_URI: mongodb://root:buildonly@host.docker.internal:27017/openstock?authSource=admin
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: buildonly
+        options: >-
+          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping')\""
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this commit is already published
+        id: exists
+        run: |
+          set -uo pipefail
+          TAG="$IMAGE:sha-${{ steps.meta.outputs.sha }}"
+          if [ "${{ inputs.force }}" != "true" ] && docker manifest inspect "$TAG" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG already exists — nothing to build"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        if: steps.exists.outputs.skip == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.exists.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          TAG="$IMAGE:sha-${{ steps.meta.outputs.sha }}"
+          for i in $(seq 1 30); do
+            docker run --rm --network host mongo:7 \
+              mongosh "$BUILD_MONGODB_URI" --quiet --eval 'db.adminCommand("ping")' >/dev/null 2>&1 && break
+            echo "waiting for mongo ($i/30)"; sleep 3
+          done
+          docker build \
+            --add-host=host.docker.internal:host-gateway \
+            -f docker/Dockerfile \
+            --build-arg "BUILD_MONGODB_URI=$BUILD_MONGODB_URI" \
+            -t "$TAG" \
+            -t "$IMAGE:latest" \
+            .
+          docker push "$TAG"
+          docker push "$IMAGE:latest"
+          {
+            echo "### Published \`$TAG\`"
+            echo
+            echo 'Pin this digest in docker/openstock/compose.yaml:'
+            echo
+            echo '```'
+            docker image inspect "$IMAGE:latest" --format '{{index .RepoDigests 0}}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
