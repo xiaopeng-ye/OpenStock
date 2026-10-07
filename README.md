@@ -1,7 +1,7 @@
 
 
 <p align="center">
-  <b>New from Open Dev Society:</b> <a href="https://github.com/Open-Dev-Society/kitbash"><b>kitbash</b></a>. Before you build, find out which parts already exist on GitHub. Borrow them, adapt them, or write the rest.
+  <b>New:</b> <a href="https://github.com/diip3sh/orbit"><b>Orbit</b></a>. Free, open-source macOS screen recorder, screenshot tool and video editor: auto-zoom, smooth cursor, backgrounds, web recordings and AI agent recording.
 </p>
 
 <p align="center">
@@ -245,6 +245,10 @@ services:
 volumes:
   mongo-data:
 ```
+
+## ☁️ One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/OpenStock/)
 
 ## 🔐 Environment Variables <a name="environment-variables"></a>
 
